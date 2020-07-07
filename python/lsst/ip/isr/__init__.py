@@ -38,3 +38,5 @@ from .isrQa import *
 from .isrMock import *
 from .ptcDataset import *
 from .defects import *
+from .brighterFatterKernel import *
+
