@@ -26,7 +26,6 @@ __all__ = ['BrighterFatterKernel']
 
 
 import numpy as np
-from collections import defaultdict
 from astropy.table import Table
 from . import IsrCalib
 
@@ -65,6 +64,7 @@ class BrighterFatterKernel(IsrCalib):
         self.level = level
         self.sourceLevel = level
 
+        # CZW: These two blocks are unnecessary, correct?
         # Internal archival information?
         self.originalLevel = self.sourceLevel
         self.means = None
@@ -84,12 +84,12 @@ class BrighterFatterKernel(IsrCalib):
         if camera:
             self.initFromCamera(camera)
 
-        self.gains = defaultdict(dict)
-        self.ampKernels = defaultdict(dict)
+        self.gains = dict()
+        self.ampKernels = dict()
         self.detKernels = dict()
 
         super().__init__(**kwargs)
-        self.requiredAttributes.update(['level', 'gains',
+        self.requiredAttributes.update(['level', 'sourceLevel', 'gains',
                                         'ampKernels', 'detKernels'])
 
     def updateMetadata(self, setDate=False, **kwargs):
@@ -106,17 +106,22 @@ class BrighterFatterKernel(IsrCalib):
         kwargs :
             Other keyword parameters to set in the metadata.
         """
-        kwargs['INSTRUME'] = self._instrument
+        kwargs['LEVEL'] = self.level
+        kwargs['SOURCE_LEVEL'] = self.sourceLevel
+        kwargs['KERNEL_DX'] = self.shape[0]
+        kwargs['KERNEL_DY'] = self.shape[1]
 
         super().updateMetadata(setDate=setDate, **kwargs)
 
-    def initFromCamera(self, camera):
+    def initFromCamera(self, camera, detectorId=None):
         """Initialize kernel structure from camera.
 
         Parameters
         ----------
         camera : `lsst.afw.cameraGeom.Camera`
             Camera to use to define geometry.
+        detectorId : `int`, optional
+            Index of the detector to generate.
 
         Returns
         -------
@@ -124,14 +129,23 @@ class BrighterFatterKernel(IsrCalib):
             The initialized calibration.
         """
         self._instrument = camera.getName()
-        for det in camera:
-            detName = det.getName()
-            self.detKernels[detName] = []
 
-            for amp in det:
+        if detectorId is not None:
+            detector = camera[detectorId]
+            self._detectorId = detectorId
+            self._detectorName = detector.getName()
+            self._detectorSerial = detector.getSerial()
+            self.level = 'AMP'
+            for amp in detector:
                 ampName = amp.getName()
-                self.gains[detName][ampName] = []
-                self.ampKernels[detName][ampName] = []
+                self.gains[ampName] = []
+                self.ampKernels[ampName] = []
+        else:
+            self.level = 'DETECTOR'
+            for det in camera:
+                detName = det.getName()
+                self.detKernels[detName] = []
+
         return self
 
     @classmethod
@@ -161,11 +175,12 @@ class BrighterFatterKernel(IsrCalib):
                                f"found {dictionary['metadata']['OBSTYPE']}")
 
         calib.setMetadata(dictionary['metadata'])
-        calib._instrument = dictionary['metadata']['INSTRUME']
-        calib.level = dictionary['metadata']['LEVEL']
-        calib.sourceLevel = dictionary['metadata']['SOURCE_LEVEL']
-        calib.shape = (dictionary['metadata']['KERNEL_DX'],
-                       dictionary['metadata']['KERNEL_DY'])
+        calib.calibInfoFromDict(dictionary)
+
+        calib.level = dictionary['metadata'].get('LEVEL', 'AMP')
+        calib.sourceLevel = dictionary['metadata'].get('SOURCE_LEVEL', 'AMP')
+        calib.shape = (dictionary['metadata'].get('KERNEL_DX', 0),
+                       dictionary['metadata'].get('KERNEL_DY', 0))
 
         calib.gains = dictionary['gains']
         calib.ampKernels = {amp: dictionary['ampKernels'][amp].reshape(calib.shape)
@@ -187,7 +202,7 @@ class BrighterFatterKernel(IsrCalib):
         dictionary : `dict`
             Dictionary of properties.
         """
-        self.updateMetadata(LEVEL=self.level, SOURCE_LEVEL=self.sourceLevel)
+        self.updateMetadata()
 
         outDict = {}
         metadata = self.getMetadata()
@@ -228,10 +243,6 @@ class BrighterFatterKernel(IsrCalib):
         inDict = dict()
         inDict['metadata'] = metadata
 
-        inDict['instrument'] = metadata['INSTRUME']
-        inDict['level'] = metadata['LEVEL']
-        inDict['sourceLevel'] = metadata['SOURCE_LEVEL']
-
         amps = ampTable['AMPLIFIER']
         gains = ampTable['GAIN']
         ampKernels = ampTable['KERNEL']
@@ -266,13 +277,13 @@ class BrighterFatterKernel(IsrCalib):
         ampTable = Table([{'AMPLIFIER': self.gains.keys(),
                            'GAIN': self.gains,
                            'KERNEL': [self.ampKernels[amp].reshape(kernelLength).toList()
-                                      for amp in self.gains]}])
+                                      for amp in self.gains.keys()]}])
         ampTable.meta = self.getMetadata().toDict()
         tableList.append(ampTable)
 
         detTable = Table([{'DETECTOR': self.detKernel.keys(),
                            'KERNEL': [self.detKernels[det].reshape(kernelLength).toList()
-                                      for det in self.detKernels]}])
+                                      for det in self.detKernels.keys()]}])
         detTable.meta = self.getMetadata().toDict()
         tableList.append(detTable)
 
