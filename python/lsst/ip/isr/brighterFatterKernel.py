@@ -68,28 +68,37 @@ class BrighterFatterKernel(IsrCalib):
         # Internal archival information?
         self.originalLevel = self.sourceLevel
         self.means = None
-        self.rawMeans = None
-        self.rawXcorrs = None
-        self.xCorrs = None
-        self.meanXCorrs = None
+        self.rawMeans = dict()
+        self.rawXCorrs = dict()
+        self.xCorrs = dict()
+        self.meanXCorrs = dict()
 
         # Things directly from PTCdata
-        self.gain = None
+        self.gain = dict()
         self.gainErr = None
         self.noise = None
         self.noseErr = None
         self.ptcResults = None
 
-        # Things that are used downstream
-        if camera:
-            self.initFromCamera(camera)
+        # PTC Contents:
+        # rawMeans / rawVars
+        # gain / gainErr / noise /noiseErr
+        # p tcFitPars / ptcFitsParsError / ptcFitChiSq
+        # covariances / covariancesModel / covariancesSqrtWeights
+        # aMatrix / bMatrix / covariancesNoB / covarModelNoB / covarSqrtWgtNoB / aMatrixNoB
+        # finalVars / finalModelVars / finalMeans
 
-        self.gains = dict()
+        # Things that are used downstream
+
         self.ampKernels = dict()
         self.detKernels = dict()
+        self.shape = (8, 8)
+
+        if camera:
+            self.initFromCamera(camera, detectorId=kwargs.get('detectorId', None))
 
         super().__init__(**kwargs)
-        self.requiredAttributes.update(['level', 'sourceLevel', 'gains',
+        self.requiredAttributes.update(['level', 'sourceLevel', 'gain',
                                         'ampKernels', 'detKernels'])
 
     def updateMetadata(self, setDate=False, **kwargs):
@@ -130,18 +139,17 @@ class BrighterFatterKernel(IsrCalib):
         """
         self._instrument = camera.getName()
 
-        if detectorId is not None:
+        if self.level == 'AMP':
             detector = camera[detectorId]
             self._detectorId = detectorId
             self._detectorName = detector.getName()
             self._detectorSerial = detector.getSerial()
-            self.level = 'AMP'
+
             for amp in detector:
                 ampName = amp.getName()
-                self.gains[ampName] = []
+                self.gain[ampName] = []
                 self.ampKernels[ampName] = []
-        else:
-            self.level = 'DETECTOR'
+        elif self.level == 'DETECTOR':
             for det in camera:
                 detName = det.getName()
                 self.detKernels[detName] = []
@@ -182,11 +190,17 @@ class BrighterFatterKernel(IsrCalib):
         calib.shape = (dictionary['metadata'].get('KERNEL_DX', 0),
                        dictionary['metadata'].get('KERNEL_DY', 0))
 
-        calib.gains = dictionary['gains']
-        calib.ampKernels = {amp: dictionary['ampKernels'][amp].reshape(calib.shape)
+        calib.gain = dictionary['gain']
+        calib.rawMeans = {amp: dictionary['rawMeans'][amp] for amp in dictionary['rawMeans']}
+        calib.rawXcorrs = {amp: dictionary['rawXcorrs'][amp] for amp in dictionary['rawXcorrs']}
+        calib.xCorrs = {amp: dictionary['xCorrs'][amp] for amp in dictionary['xCorrs']}
+        calib.meanXCorrs = {amp: dictionary['meanXcorrs'][amp] for amp in dictionary['rawXcorrs']}
+
+        calib.ampKernels = {amp: np.array(dictionary['ampKernels'][amp]).reshape(calib.shape)
                             for amp in dictionary['ampKernels']}
-        calib.detKernels = {det: dictionary['detKernels'][det].reshape(calib.shape)
+        calib.detKernels = {det: np.array(dictionary['detKernels'][det]).reshape(calib.shape)
                             for det in dictionary['detKernels']}
+
 
         calib.updateMetadata()
         return calib
@@ -210,11 +224,15 @@ class BrighterFatterKernel(IsrCalib):
 
         kernelLength = self.shape[0] * self.shape[1]
 
-        outDict['gains'] = self.gains
+        outDict['gain'] = self.gain
         outDict['ampKernels'] = {amp: self.ampKernels[amp].reshape(kernelLength).tolist()
                                  for amp in self.ampKernels}
         outDict['detKernels'] = {det: self.detKernels[det].reshape(kernelLength).tolist()
                                  for det in self.detKernels}
+        outDict['rawMeans'] = {amp: self.rawMeans[amp] for amp in self.rawMeans}
+        outDict['rawXcorrs'] = {amp: self.rawXcorrs[amp] for amp in self.rawXcorrs}
+        outDict['xCorrs'] = {amp: self.xCorrs[amp].tolist() for amp in self.xCorrs}
+        outDict['meanXcorrs'] = {amp: self.meanXCorrs[amp].tolist() for amp in self.meanXCorrs}
 
         return outDict
 
@@ -244,16 +262,28 @@ class BrighterFatterKernel(IsrCalib):
         inDict['metadata'] = metadata
 
         amps = ampTable['AMPLIFIER']
-        gains = ampTable['GAIN']
+        gainList = ampTable['GAIN']
         ampKernels = ampTable['KERNEL']
 
-        inDict['gains'] = {amp: gain for amp, gain in zip(amps, gains)}
+        rawMeans = ampTable['RAW_MEANS']
+        rawXcorrs = ampTable['RAW_XCORRS']
+        xCorrs = ampTable['XCORRS']
+        meanXcorrs = ampTable['MEAN_XCORRS']
+
+        inDict['gain'] = {amp: gain for amp, gain in zip(amps, gainList)}
         inDict['ampKernels'] = {amp: kernel for amp, kernel in zip(amps, ampKernels)}
+
+        inDict['rawMeans'] = {amp: kernel for amp, kernel in zip(amps, rawMeans)}
+        inDict['rawXcorrs'] = {amp: kernel for amp, kernel in zip(amps, rawXcorrs)}
+        inDict['xCorrs'] = {amp: kernel for amp, kernel in zip(amps, xCorrs)}
+        inDict['meanXcorrs'] = {amp: kernel for amp, kernel in zip(amps, meanXcorrs)}
 
         if len(tableList) > 1:
             detTable = tableList[1]
             inDict['detKernels'] = {det: kernel for det, kernel
                                     in zip(detTable['DETECTOR'], detTable['KERNEL'])}
+        else:
+            inDict['detKernels'] = {}
 
         return cls.fromDict(inDict)
 
@@ -274,18 +304,42 @@ class BrighterFatterKernel(IsrCalib):
         self.updateMetadata()
         kernelLength = self.shape[0] * self.shape[1]
 
-        ampTable = Table([{'AMPLIFIER': self.gains.keys(),
-                           'GAIN': self.gains,
-                           'KERNEL': [self.ampKernels[amp].reshape(kernelLength).toList()
-                                      for amp in self.gains.keys()]}])
+        ampList = []
+        gainList = []
+        kernelList = []
+
+        rawMeanList = []
+        rawXcorrList = []
+        xCorrList = []
+        meanXcorrsList = []
+
+        for amp in self.gain.keys():
+            ampList.append(amp)
+            gainList.append(self.gain[amp])
+            kernelList.append(self.ampKernels[amp].reshape(kernelLength).tolist())
+
+        ampTable = Table({'AMPLIFIER': ampList,
+                          'GAIN': gainList,
+                          'KERNEL': kernelList,
+                          'RAW_MEANS': rawMeanList,
+                          'RAW_XCORRS': rawXcorrList,
+                          'XCORRS': xCorrList,
+                          'MEAN_XCORRS': meanXcorrsList,
+                      })
         ampTable.meta = self.getMetadata().toDict()
         tableList.append(ampTable)
 
-        detTable = Table([{'DETECTOR': self.detKernel.keys(),
-                           'KERNEL': [self.detKernels[det].reshape(kernelLength).toList()
-                                      for det in self.detKernels.keys()]}])
-        detTable.meta = self.getMetadata().toDict()
-        tableList.append(detTable)
+        if False:
+            detList = []
+            kernelList = []
+            for det in self.detKernels.keys():
+                detList.append(det)
+                kernelList.append(self.detKernels[det].reshape(kernelLength).tolist())
+
+            detTable = Table({'DETECTOR': detList,
+                              'KERNEL': kernelList})
+            detTable.meta = self.getMetadata().toDict()
+            tableList.append(detTable)
 
         return tableList
 
@@ -293,8 +347,8 @@ class BrighterFatterKernel(IsrCalib):
     def makeDetectorKernelFromAmpwiseKernels(self, detectorName, ampsToExclude=[]):
         """Average the amplifier level kernels to create a detector level kernel.
         """
-        inKernels = [self.ampKernels[detectorName][amp] for amp in
-                     self.ampKernels[detectorName] if amp not in ampsToExclude]
+        inKernels = [self.ampKernels[amp] for amp in
+                     self.ampKernels if amp not in ampsToExclude]
         avgKernel = np.zeros_like(inKernels[0])
         for kernel in inKernels:
             avgKernel += kernel
