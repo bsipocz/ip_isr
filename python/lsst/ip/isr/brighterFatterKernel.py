@@ -202,7 +202,6 @@ class BrighterFatterKernel(IsrCalib):
         calib.detKernels = {det: np.array(dictionary['detKernels'][det]).reshape(calib.shape)
                             for det in dictionary['detKernels']}
 
-
         calib.updateMetadata()
         return calib
 
@@ -325,8 +324,8 @@ class BrighterFatterKernel(IsrCalib):
                           'RAW_MEANS': rawMeanList,
                           'RAW_XCORRS': rawXcorrList,
                           'XCORRS': xCorrList,
-                          'MEAN_XCORRS': meanXcorrsList,
-                      })
+                          'MEAN_XCORRS': meanXcorrsList, })
+
         ampTable.meta = self.getMetadata().toDict()
         tableList.append(ampTable)
 
