@@ -68,6 +68,7 @@ class BrighterFatterKernel(IsrCalib):
         # Internal archival information?
         self.originalLevel = self.sourceLevel
         self.means = None
+        self.variances = None
         self.rawMeans = dict()
         self.rawXCorrs = dict()
         self.xCorrs = dict()
