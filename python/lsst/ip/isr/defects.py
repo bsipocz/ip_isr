@@ -194,8 +194,12 @@ class Defects(IsrCalib):
             maxX = max(maxX, bbox.getMaxX())
             maxY = max(maxY, bbox.getMaxY())
 
-        region = lsst.geom.Box2I(lsst.geom.Point2I(minX, minY),
-                                 lsst.geom.Point2I(maxX, maxY))
+        if len(self) == 0:
+            region = lsst.geom.Box2I(lsst.geom.Point2I(0, 0),
+                                     lsst.geom.Point2I(1, 1))
+        else:
+            region = lsst.geom.Box2I(lsst.geom.Point2I(minX, minY),
+                                     lsst.geom.Point2I(maxX, maxY))
 
         mi = lsst.afw.image.MaskedImageF(region)
         self.maskPixels(mi, maskName="BAD")
